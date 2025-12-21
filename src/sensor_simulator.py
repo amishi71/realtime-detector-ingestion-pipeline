@@ -18,6 +18,7 @@ Is this reading nominal, degraded, or invalid?
 import time
 import random
 from datetime import datetime
+from src.observer import Observer
 
 sensor_id= "sensor_001"
 sequence_number= 0
@@ -29,6 +30,8 @@ drift_rate= 0.01 #value drifts per second
 burst_remaining= 0 #Bursty loss state
 recovering_remaining= 0
 last_sequence_emitted = None
+
+observer= Observer()
 
 while True:
     #---noise---
@@ -79,7 +82,7 @@ while True:
         status = "NOMINAL"
 
 
-    reading = {
+    packet = {
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "sensor_id": sensor_id,
         "sequence_number": emit_sequence,
@@ -87,7 +90,9 @@ while True:
         "status": status
     }
 
-    print(reading)
+    print(packet)
+    observer.observe(packet)
+
     last_sequence_emitted= emit_sequence
     sequence_number += 1
     time.sleep(1)  # Emit data every second
