@@ -20,6 +20,10 @@ import random
 from datetime import datetime
 from src.observer import Observer
 from src.connector import Connector
+from src.preprocessor import Preprocessor
+from src.message_bus import MessageBus
+from src.consumer import Consumer
+
 
 sensor_id= "sensor_001"
 sequence_number= 0
@@ -32,8 +36,16 @@ burst_remaining= 0 #Bursty loss state
 recovering_remaining= 0
 last_sequence_emitted = None
 
-observer= Observer()
-connector= Connector(observer)
+bus = MessageBus()
+
+observer = Observer()
+preprocessor = Preprocessor()
+
+consumer = Consumer(observer, preprocessor)
+
+bus.subscribe(consumer.handle)
+
+
 while True:
     #---noise---
     noise= random.uniform(-0.5, 0.5) #noise is randomness without memory-does not accumulate.
@@ -92,7 +104,7 @@ while True:
     }
 
     print(packet)
-    connector.ingest(packet)
+    bus.publish(packet)
 
     last_sequence_emitted= emit_sequence
     sequence_number += 1
