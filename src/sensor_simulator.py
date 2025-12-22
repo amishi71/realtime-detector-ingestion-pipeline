@@ -19,6 +19,7 @@ import time
 import random
 from datetime import datetime
 from src.observer import Observer
+from src.connector import Connector
 
 sensor_id= "sensor_001"
 sequence_number= 0
@@ -32,7 +33,7 @@ recovering_remaining= 0
 last_sequence_emitted = None
 
 observer= Observer()
-
+connector= Connector(observer)
 while True:
     #---noise---
     noise= random.uniform(-0.5, 0.5) #noise is randomness without memory-does not accumulate.
@@ -91,7 +92,7 @@ while True:
     }
 
     print(packet)
-    observer.observe(packet)
+    connector.ingest(packet)
 
     last_sequence_emitted= emit_sequence
     sequence_number += 1

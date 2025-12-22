@@ -34,7 +34,7 @@ class Observer:
         # --- Timestamp spacing ---
         if self.last_timestamp is not None:
             delta = (ts - self.last_timestamp).total_seconds()
-            if delta > 1.5:
+            if delta > 1.5: #currently hard-coded
                 print(f"⚠️ Time gap of {delta:.2f}s detected")
 
         # --- Status transitions ---
