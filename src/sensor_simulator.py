@@ -1,4 +1,6 @@
-#Pretend to be a simulator and emit data over time.
+# src/sensor_simulator.py
+
+# Pretend to be a simulator and emit data over time.
 ''' 
 METADATA:
 
@@ -18,94 +20,79 @@ Is this reading nominal, degraded, or invalid?
 import time
 import random
 from datetime import datetime
-from src.observer import Observer
-from src.connector import Connector
-from src.preprocessor import Preprocessor
-from src.message_bus import MessageBus
-from src.consumer import Consumer
 
 
-sensor_id= "sensor_001"
-sequence_number= 0
+def run_simulator(bus):
+    sensor_id = "sensor_001"
+    sequence_number = 0
 
-baseline_value= 100.0 #fixed baseline signal
-initial_baseline= baseline_value
-drift_rate= 0.01 #value drifts per second
+    baseline_value = 100.0  # fixed baseline signal
+    initial_baseline = baseline_value
+    drift_rate = 0.01  # value drifts per second
 
-burst_remaining= 0 #Bursty loss state
-recovering_remaining= 0
-last_sequence_emitted = None
+    burst_remaining = 0  # Bursty loss state
+    recovering_remaining = 0
+    last_sequence_emitted = None
 
-bus = MessageBus()
+    while True:
+        # --- noise ---
+        noise = random.uniform(-0.5, 0.5)  # noise is randomness without memory-does not accumulate.
+        observed_value = baseline_value + noise
 
-observer = Observer()
-preprocessor = Preprocessor()
+        # --- drift ---
+        baseline_value += drift_rate  # Drift changes the baseline- has memory
 
-consumer = Consumer(observer, preprocessor)
+        # --- missing packets ---
+        # Whether we are in a burst of silence
+        if burst_remaining > 0:  # Silence-no emission
+            burst_remaining -= 1
+            sequence_number += 1
+            time.sleep(1)
+            continue
 
-bus.subscribe(consumer.handle)
+        # occasionally start a bursty loss
+        if random.random() < 0.02:  # 2% chance
+            burst_remaining = random.randint(2, 5)  # for seconds of silence
+            recovering_remaining = 3
+            sequence_number += 1
+            time.sleep(1)
+            continue
 
+        if random.random() < 0.05:  # 5% chance
+            sequence_number += 1
+            time.sleep(1)
+            continue
 
-while True:
-    #---noise---
-    noise= random.uniform(-0.5, 0.5) #noise is randomness without memory-does not accumulate.
-    observed_value= baseline_value+ noise
+        # --- Sequence Corruption ---
+        emit_sequence = sequence_number
 
-    #---drift---
-    baseline_value += drift_rate ## Drift changes the baseline- has memory
+        if random.random() < 0.01 and last_sequence_emitted is not None:  # duplicate packet
+            emit_sequence = last_sequence_emitted
 
-    #---missing packets---
-    #Whether we are in a burst of silence
-    if burst_remaining> 0: #Silence-no emission
-        burst_remaining -= 1
+        elif random.random() < 0.01:  # skipped sequence
+            emit_sequence = sequence_number + 1
+            sequence_number += 1
+
+        # --- Status determination ---
+        if recovering_remaining > 0:
+            status = "RECOVERING"
+            recovering_remaining -= 1
+        elif abs(noise) > 0.4 or abs(baseline_value - initial_baseline) > 1.0:
+            status = "DEGRADED"
+        else:
+            status = "NOMINAL"
+
+        packet = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "sensor_id": sensor_id,
+            "sequence_number": emit_sequence,
+            "value": round(observed_value, 3),
+            "status": status,
+        }
+
+        print(packet)
+        bus.publish(packet)
+
+        last_sequence_emitted = emit_sequence
         sequence_number += 1
-        time.sleep(1)
-        continue
-
-    #occassionally start a bursty loss
-    if random.random() < 0.02: #2% chance
-        burst_remaining= random.randint(2, 5) #for seconds of silence
-        recovering_remaining= 3
-        sequence_number += 1
-        time.sleep(1)
-        continue
-
-    if random.random() < 0.05: #5% chance 
-        sequence_number += 1
-        time.sleep(1)
-        continue
-
-    #---Sequence Corruption---
-    emit_sequence = sequence_number
-
-    if random.random()< 0.01 and last_sequence_emitted is not None: #duplicate packet
-        emit_sequence = last_sequence_emitted
-
-    elif random.random()< 0.01: #skipped sequence
-        emit_sequence = sequence_number + 1
-        sequence_number += 1
-
-     # --- Status determination ---
-    if recovering_remaining > 0:
-        status = "RECOVERING"
-        recovering_remaining -= 1
-    elif abs(noise) > 0.4 or abs(baseline_value - initial_baseline) > 1.0:
-        status = "DEGRADED"
-    else:
-        status = "NOMINAL"
-
-
-    packet = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "sensor_id": sensor_id,
-        "sequence_number": emit_sequence,
-        "value": round(observed_value, 3),
-        "status": status
-    }
-
-    print(packet)
-    bus.publish(packet)
-
-    last_sequence_emitted= emit_sequence
-    sequence_number += 1
-    time.sleep(1)  # Emit data every second
+        time.sleep(1)  # Emit data every second

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from prometheus_client import Counter
 
+
 validator_violations = Counter(
     "validator_violations_total",
     "Total validator invariant violations",

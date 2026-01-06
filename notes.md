@@ -1,75 +1,242 @@
-# 20/12/25
+# Notes — Real-Time Detector Style Ingestion and Cleaning Pipeline
+
+## Project goal
+
+Build a small real-time telemetry pipeline that can handle bad sensor data.
+
+The system should:
+
+* accept unreliable input
+* detect problems without changing the data
+* produce clean, regular output for downstream use
+
+This is meant to mimic how real detector / telemetry systems behave.
+
+---
 
 ## Component 1 — Simulated Sensor Generator
 
-### Task 1: Create a uniform simulated sensor generator
-* Built first long-running sensor simulator
-* Learned process lifecycle and operator interrupts
-* Confirmed `python3` usage on macOS
-* Verified stable cadence and sequence behavior
+### What it does
 
-### Task 2: Corrupt the data — add signals
-*[A physical quantity + imperfections]*
-* Added noise and drift
-* Added missing packets and sequence corruption
-* Added flags for status determination
+A long-running Python process that emits sensor packets at ~1 Hz.
 
----
+Each packet has:
 
-## Checkpoint 1: Observed failure modes (simulator)
-This checkpoint documents what kinds of data corruption the simulator can already produce, and what we can observe with the current --Observer--.
+* `timestamp`
+* `sensor_id`
+* `sequence_number`
+* `value`
+* `status`
 
----
+The simulator intentionally produces bad data to test the pipeline.
 
-### Types of corruption
+### Failure modes implemented
 
-#### Noise
-* Small random fluctuations around a baseline value
-* Doesn’t accumulate over time
-* Represents normal sensor jitter
+* **Noise**
+  Small random changes around a base value.
 
-#### Drift
-* Slow, continuous change in baseline value over time
-* Accumulates
-* Represents calibration drift or thermal effects
+* **Drift**
+  Slow change in the baseline over time.
 
-#### Missing packets
-* Single dropped packets (random)
-* Bursty packet loss (2–5 seconds of silence)
-* Causes gaps in sequence numbers and timestamps
+* **Missing packets**
 
-#### Sequence corruption
-* Skipped sequence numbers
-* Rare duplicate sequence numbers
-* Breaks assumptions about monotonic ordering
+  * random single drops
+  * bursty drops (2–5 seconds)
 
-#### Degraded quality states
-* Packets flagged as **DEGRADED** when noise is high or drift exceeds threshold
-* Temporary **RECOVERING** periods after burst losses
+* **Sequence issues**
+
+  * skipped sequence numbers
+  * rare duplicates
+
+* **Status flags**
+
+  * `NOMINAL`
+  * `DEGRADED` (high noise or drift)
+  * `RECOVERING` (after burst loss)
+
+The simulator violates assumptions on purpose.
 
 ---
 
-These represent realistic failure modes seen in real-world telemetry systems.
+## Component 2 — Message Bus
+
+A simple in-process message bus.
+
+Responsibilities:
+
+* hold a list of subscribers
+* publish each packet to all subscribers
+
+It does **not**:
+
+* validate data
+* buffer data
+* modify packets
+
+This keeps components loosely coupled.
 
 ---
 
-### Observer capabilities
+## Component 3 — Observer
 
-The observer can:
-* Detect non-monotonic sequence numbers
-* Count and report missing packets
-* Detect abnormal time gaps
-* Track transitions into and out of recovery
-* Count degraded packets
-* Maintain internal state across packets
+### Purpose
+
+Watch the data stream and report problems without fixing anything.
+
+### What it detects
+
+* non-monotonic sequence numbers
+* missing packets
+* abnormal time gaps
+* recovery periods
+* degraded packets
+
+### Design choice
+
+The observer is **read-only**.
+It never corrects data.
+
+This keeps detection separate from correction.
 
 ---
 
-### Current limitations
-* Observer prints logs but does not store metrics
-* No aggregation windows yet
-* No alert thresholds defined
-* No persistence
+## Component 4 — Preprocessor
+
+### Purpose
+
+Turn irregular, unreliable input into a clean downstream stream.
+
+### Output rules
+
+* Fixed cadence: **1 Hz**
+* One output frame every second, no matter what
+* Output sequence is strictly increasing
+* Output sequence is independent of raw sensor sequence numbers
+
+### Missing data handling
+
+* **Single missing packet**
+  Forward-fill last value
+  Mark frame as `IMPUTED`
+
+* **Multiple missing seconds**
+  Continue forward-fill
+  Mark all frames as `IMPUTED`
+
+* **Long silence**
+  Emit placeholder value
+  Mark frames as `UNUSABLE`
+
+The preprocessor never edits past frames.
+
+### Quality labels
+
+* `VALID` — direct from raw packet
+* `IMPUTED` — filled due to missing data
+* `UNUSABLE` — placeholder only, not reliable
 
 ---
+
+## Invariants after preprocessing
+
+Downstream systems can assume:
+
+* time is regular
+* every second has a frame
+* every frame has a value
+* quality is always explicit
+* sequence numbers are monotonic
+
+No guessing required downstream.
+
+---
+
+## Component 5 — Validator
+
+### Purpose
+
+Check whether incoming packets violate basic physical rules.
+
+Validator checks:
+
+* schema correctness
+* sequence numbers going backwards
+* timestamps jumping backwards or too far into the future
+
+### Design choice
+
+Invalid packets are **observed, not dropped**.
+
+This separates:
+
+* impossible data (validator)
+* degraded data (observer)
+* corrected data (preprocessor)
+
+---
+
+## Canonical packet schema
+
+```
+sensor_id        : string
+sequence_number  : int
+timestamp        : ISO-8601 (event time, UTC)
+value            : float
+status           : enum
+```
+
+Timestamps are **event-time**, not ingestion-time.
+
+---
+
+## Entry point refactor
+
+### Problem
+
+The simulator was doing too many things:
+
+* generating data
+* wiring components
+* acting as entry point
+
+### Fix
+
+* Added `src/main.py`
+* Simulator is now a callable function
+* `main.py` wires everything together
+
+Run using:
+
+```bash
+python3 -m src
+```
+
+This fixes imports and keeps responsibilities clean.
+
+---
+
+## Current state
+
+The system now has:
+
+* a realistic sensor simulator
+* a validator for impossible data
+* an observer for degradation
+* a preprocessor that enforces cadence and quality
+* a clean entry point
+
+The pipeline runs continuously and produces regular output even under failure.
+
+---
+
+## Next step
+
+Add metrics:
+
+* validator violation counts
+* observer counters
+* preprocessor output rate
+
+Metrics will observe behavior only.
+They will not change system logic.
 
