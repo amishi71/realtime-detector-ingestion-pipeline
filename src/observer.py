@@ -1,18 +1,35 @@
 from datetime import datetime
+from prometheus_client import Counter
+
+
+observer_missing_packets = Counter(
+    "observer_missing_packets_total",
+    "Total missing packets detected by observer",
+)
+
+observer_degraded_packets = Counter(
+    "observer_degraded_packets_total",
+    "Total degraded packets observed",
+)
+
+observer_recovery_events = Counter(
+    "observer_recovery_events_total",
+    "Number of recovery periods entered",
+)
+
 
 class Observer:
     def __init__(self):
         self.last_sequence = None
         self.last_timestamp = None
 
-        self.missing_packets = 0 #counters, not detectors.
+        self.missing_packets = 0  # counters, not detectors
         self.degraded_count = 0
 
-        self.in_recovery = False  #state, not a counter.
+        self.in_recovery = False  # state, not a counter
         self.recovery_length = 0
 
-    def observe(self, packet: dict): #once per emitted packet.
-
+    def observe(self, packet: dict):
         """
         Observe a single sensor packet and log operational insights.
         """
@@ -23,29 +40,32 @@ class Observer:
 
         # --- Sequence integrity ---
         if self.last_sequence is not None:
-            expected = self.last_sequence + 1 #encodes the invariant.
+            expected = self.last_sequence + 1  # encodes the invariant
 
-            if seq != expected: #flags discontinuity.
+            if seq != expected:  # flags discontinuity
                 missed = max(0, seq - expected)
                 if missed > 0:
                     self.missing_packets += missed
+                    observer_missing_packets.inc(missed)   # ← ADDED
                     print(f"⚠️ Missing {missed} packets (expected {expected}, got {seq})")
 
         # --- Timestamp spacing ---
         if self.last_timestamp is not None:
             delta = (ts - self.last_timestamp).total_seconds()
-            if delta > 1.5: #currently hard-coded
+            if delta > 1.5:  # currently hard-coded
                 print(f"⚠️ Time gap of {delta:.2f}s detected")
 
         # --- Status transitions ---
         if status == "DEGRADED":
             self.degraded_count += 1
+            observer_degraded_packets.inc()               # ← ADDED
             print("⚠️ Sensor entered DEGRADED state")
 
         if status == "RECOVERING":
             if not self.in_recovery:
                 self.in_recovery = True
                 self.recovery_length = 0
+                observer_recovery_events.inc()            # ← ADDED
                 print("ℹ️ Entered RECOVERING state")
             self.recovery_length += 1
         else:

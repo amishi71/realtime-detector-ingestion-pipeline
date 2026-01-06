@@ -1,4 +1,11 @@
 from datetime import datetime, timedelta
+from prometheus_client import Counter
+
+
+preprocessor_output_frames = Counter(
+    "preprocessor_output_frames_total",
+    "Total frames emitted by preprocessor",
+)
 
 
 class Preprocessor:
@@ -71,4 +78,7 @@ class Preprocessor:
 
         self.last_value = value
         self.logical_sequence += 1
+
+        preprocessor_output_frames.inc()   # ← STEP 3.3 (the only touch)
+
         return frame
