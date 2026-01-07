@@ -1,38 +1,52 @@
 # src/main.py
 
-from src.message_bus import MessageBus
 from src.validator import Validator
 from src.observer import Observer
 from src.preprocessor import Preprocessor
-from src.consumer import Consumer
 from src.sensor_simulator import run_simulator
+
+from src.redis_producer import RedisProducer
+from src.redis_consumer import RedisConsumer
+
 from prometheus_client import start_http_server
+import threading
 
 
 def main():
     start_http_server(8000)
     print("Metrics available at http://localhost:8000/metrics")
 
-    bus = MessageBus()
     validator = Validator()
     observer = Observer()
     preprocessor = Preprocessor()
 
-    bus = MessageBus()
+    producer = RedisProducer(stream="sensor_packets")
 
-    validator = Validator()
-    observer = Observer()
-    preprocessor = Preprocessor()
+    def emit(packet):
+        producer.emit(packet)
 
-    consumer = Consumer(
-        validator=validator,
-        observer=observer,
-        preprocessor=preprocessor,
+    consumer = RedisConsumer(stream="sensor_packets")
+
+    def handle_packet(packet):
+        packet = validator.validate(packet)
+        observer.observe(packet)
+        frames = preprocessor.process(packet)
+        for frame in frames:
+            print("CLEAN:", frame)
+    
+    def emit(packet):
+        producer.emit(packet)
+
+   
+    sim_thread = threading.Thread(
+        target=run_simulator,
+        args=(emit,),
+        daemon=True,
     )
+    sim_thread.start()
 
-    bus.subscribe(consumer.handle)
-
-    run_simulator(bus)
+ 
+    consumer.consume(handle_packet)
 
 
 if __name__ == "__main__":
