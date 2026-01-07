@@ -240,3 +240,84 @@ Add metrics:
 Metrics will observe behavior only.
 They will not change system logic.
 
+-------
+
+## Checkpoint — Project Status
+
+### What is done so far
+
+**Core data behavior**
+
+* Sensor packets use event-time timestamps
+* Noise, drift, missing packets, and sequence errors are simulated
+* Status flags implemented: `NOMINAL`, `DEGRADED`, `RECOVERING`
+
+**Pipeline structure**
+
+* Data flow:
+  `Simulator → MessageBus → Validator → Observer → Preprocessor`
+* Each component has a single responsibility
+* Detection layers do not modify data
+
+**Packet contracts**
+
+* Packet schema is fixed
+* Downstream assumptions are explicit
+* Output sequence is monotonic and independent of raw sensor order
+
+**Preprocessing guarantees**
+
+* Fixed output cadence (1 Hz)
+* Forward-fill for short gaps
+* `UNUSABLE` frames for long silence
+* Past frames are never changed
+
+**Observability**
+
+* Prometheus metrics added
+* Counters for:
+
+  * observer health
+  * validator violations
+  * preprocessor timing
+* `/metrics` endpoint is running
+
+---
+
+### What is still pending
+
+**Containerization**
+
+* Dockerfile not added yet
+* docker-compose setup pending
+
+**Streaming backend**
+
+* Currently using in-process MessageBus
+* Need to switch to Redis Streams or Kafka
+
+**Metrics visualization**
+
+* Prometheus is working
+* Grafana dashboards not set up
+
+**Downstream consumer**
+
+* No downstream model yet
+* Need a simple consumer to compare:
+
+  * raw data vs cleaned data
+
+**Evaluation**
+
+* Latency, throughput, and missing-data stats not measured yet
+
+**Repository cleanup**
+
+* README needs:
+
+  * architecture diagram
+  * run instructions
+  * component descriptions
+
+---

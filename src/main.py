@@ -6,9 +6,18 @@ from src.observer import Observer
 from src.preprocessor import Preprocessor
 from src.consumer import Consumer
 from src.sensor_simulator import run_simulator
+from prometheus_client import start_http_server
 
 
 def main():
+    start_http_server(8000)
+    print("Metrics available at http://localhost:8000/metrics")
+
+    bus = MessageBus()
+    validator = Validator()
+    observer = Observer()
+    preprocessor = Preprocessor()
+
     bus = MessageBus()
 
     validator = Validator()
