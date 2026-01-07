@@ -1,10 +1,14 @@
 import redis
 import json
+import os
+
 
 class RedisProducer:
     def __init__(self, stream="sensor_packets"):
+        host = os.getenv("REDIS_HOST", "localhost")
+
         self.client = redis.Redis(
-            host="localhost",
+            host=host,
             port=6379,
             decode_responses=True,
         )

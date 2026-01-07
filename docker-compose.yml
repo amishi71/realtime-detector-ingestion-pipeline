@@ -1,0 +1,16 @@
+services:
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+
+  pipeline:
+    container_name: pipeline
+    build: .
+    depends_on:
+      - redis
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis

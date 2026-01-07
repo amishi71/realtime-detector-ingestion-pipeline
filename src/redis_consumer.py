@@ -1,5 +1,6 @@
 import redis
 import json
+import os
 
 
 class RedisConsumer:
@@ -9,8 +10,10 @@ class RedisConsumer:
         group="pipeline",
         consumer="worker-1",
     ):
+        host = os.getenv("REDIS_HOST", "localhost")
+
         self.client = redis.Redis(
-            host="localhost",
+            host=host,
             port=6379,
             decode_responses=True,
         )
