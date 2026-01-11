@@ -1,3 +1,5 @@
+#message_bus.py
+
 class MessageBus:
     """
     Minimal in-process message bus.

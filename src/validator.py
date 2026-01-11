@@ -1,12 +1,16 @@
+
+#validator.py
+
+
 from datetime import datetime, timedelta
 from prometheus_client import Counter
 
-
-validator_violations = Counter(
+VALIDATOR_VIOLATIONS = Counter(
     "validator_violations_total",
-    "Total validator invariant violations",
-    ["type"],
+    "Total validator violations",
+    ["type"]
 )
+
 
 
 class Validator:
@@ -121,5 +125,5 @@ class Validator:
 
     def _violation(self, message, vtype="unknown"):
         self.violation_count += 1
-        validator_violations.labels(type=vtype).inc()
-        print(f"🚨 VALIDATION VIOLATION: {message}")
+        VALIDATOR_VIOLATIONS.labels(type=vtype).inc()
+        print(f" VALIDATION VIOLATION: {message}")

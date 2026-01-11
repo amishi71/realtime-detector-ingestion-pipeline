@@ -433,3 +433,19 @@ Next steps (not done yet):
 * containerize the pipeline
 
 Right now, the system is **functionally complete at the streaming level** and ready for polish and evaluation.
+---
+From the original spec:
+
+“Build a streaming ingestion pipeline that cleans, aligns, imputes, and emits normalized data to a downstream model.
+Show that cleaning improves downstream model accuracy.”
+
+You have literally done that.
+
+You can now write, without bluffing:
+
+“Under realistic packet loss, drift, and jitter, preprocessing reduced downstream prediction error across all sensors.”
+
+And you can point to a live Grafana panel that proves it.
+
+
+“Under drift, loss, and jitter, preprocessing reduces predictive error across all sensors.”

@@ -1,5 +1,3 @@
-# src/sensor_simulator.py
-
 # Pretend to be a simulator and emit data over time.
 ''' 
 METADATA:
@@ -19,64 +17,77 @@ Is this reading nominal, degraded, or invalid?
 '''
 # src/sensor_simulator.py
 
+
 import time
 import random
 from datetime import datetime
 
 
 def run_simulator(emit):
-    sensor_id = "sensor_001"
-    sequence_number = 0
+    #changed a single sensor to an array of sensors
+    sensors = {
+        "sensor_001": {"baseline": 100.0, "drift": 0.01},
+        "sensor_002": {"baseline": 200.0, "drift": -0.005},
+        "sensor_003": {"baseline": 300.0, "drift": 0.02},
+    }
 
-    baseline_value = 100.0
-    initial_baseline = baseline_value
-    drift_rate = 0.01
+    # per-sensor sequence numbers
+    sequences = {sid: 0 for sid in sensors}
 
-    burst_remaining = 0
-    recovering_remaining = 0
-    last_sequence_emitted = None
+    # per-sensor loss and recovery state
+    burst_remaining = {sid: 0 for sid in sensors}
+    recovering_remaining = {sid: 0 for sid in sensors}
+    last_sequence_emitted = {sid: None for sid in sensors}
+
+    initial_baselines = {sid: cfg["baseline"] for sid, cfg in sensors.items()}
 
     while True:
+        # pick one sensor to emit this second
+        sensor_id = random.choice(list(sensors.keys()))
+        sensor = sensors[sensor_id]
+
         # --- noise ---
         noise = random.uniform(-0.5, 0.5)
-        observed_value = baseline_value + noise
+        observed_value = sensor["baseline"] + noise
 
         # --- drift ---
-        baseline_value += drift_rate
+        sensor["baseline"] += sensor["drift"]
+
+        seq = sequences[sensor_id]
 
         # --- missing packets ---
-        if burst_remaining > 0:
-            burst_remaining -= 1
-            sequence_number += 1
+        if burst_remaining[sensor_id] > 0:
+            burst_remaining[sensor_id] -= 1
+            sequences[sensor_id] += 1
             time.sleep(1)
             continue
 
         if random.random() < 0.02:
-            burst_remaining = random.randint(2, 5)
-            recovering_remaining = 3
-            sequence_number += 1
+            burst_remaining[sensor_id] = random.randint(2, 5)
+            recovering_remaining[sensor_id] = 3
+            sequences[sensor_id] += 1
             time.sleep(1)
             continue
 
         if random.random() < 0.05:
-            sequence_number += 1
+            sequences[sensor_id] += 1
             time.sleep(1)
             continue
 
         # --- sequence corruption ---
-        emit_sequence = sequence_number
+        emit_sequence = seq
 
-        if random.random() < 0.01 and last_sequence_emitted is not None:
-            emit_sequence = last_sequence_emitted
+        if random.random() < 0.01 and last_sequence_emitted[sensor_id] is not None:
+            emit_sequence = last_sequence_emitted[sensor_id]
         elif random.random() < 0.01:
-            emit_sequence = sequence_number + 1
-            sequence_number += 1
+            emit_sequence = seq + 1
+            sequences[sensor_id] += 1
 
         # --- status ---
-        if recovering_remaining > 0:
+        if recovering_remaining[sensor_id] > 0:
             status = "RECOVERING"
-            recovering_remaining -= 1
-        elif abs(noise) > 0.4 or abs(baseline_value - initial_baseline) > 1.0:
+            recovering_remaining[sensor_id] -= 1
+        elif abs(noise) > 0.4 or abs(sensor["baseline"] - initial_baselines[sensor_id]) > 1.0:
             status = "DEGRADED"
         else:
             status = "NOMINAL"
@@ -89,9 +100,31 @@ def run_simulator(emit):
             "status": status,
         }
 
+        # --- deliberate physics violations (calibration beam) ---
+        # Occasionally inject known-bad data so the validator has something to detect.
+        # This is how real detector systems are tested.
+
+        if random.random() < 0.05:
+            # Force a backwards sequence (violates monotonicity)
+            packet["sequence_number"] = packet["sequence_number"] - random.randint(1, 5)
+
+        if random.random() < 0.05:
+            # Corrupt timestamp format
+            packet["timestamp"] = "BAD_TIMESTAMP"
+
         print(packet)
         emit(packet)
 
-        last_sequence_emitted = emit_sequence
-        sequence_number += 1
+        print(packet)
+        emit(packet)
+
+        last_sequence_emitted[sensor_id] = emit_sequence
+        sequences[sensor_id] += 1
         time.sleep(1)
+
+
+if __name__ == "__main__":
+    from src.redis_producer import RedisProducer
+
+    producer = RedisProducer(stream="sensor_packets")
+    run_simulator(producer.emit)

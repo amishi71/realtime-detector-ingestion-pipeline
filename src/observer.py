@@ -1,3 +1,5 @@
+
+#observer.py
 from datetime import datetime
 from prometheus_client import Counter
 
@@ -35,7 +37,11 @@ class Observer:
         """
 
         seq = packet["sequence_number"]
-        ts = datetime.fromisoformat(packet["timestamp"].replace("Z", ""))
+        try:
+            ts = datetime.fromisoformat(packet["timestamp"].replace("Z", ""))
+        except Exception:
+            return   # observer ignores physically impossible timestamps
+
         status = packet["status"]
 
         # --- Sequence integrity ---
