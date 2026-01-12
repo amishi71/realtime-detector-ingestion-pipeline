@@ -1,451 +1,284 @@
-Here’s a **cleaned-up, more natural `notes.md` rewrite**.
-It reads like something updated gradually while working, not like a polished report. Short sentences. Slight repetition. Practical tone. No “AI smell”.
-
-You can replace your current notes with this, or merge sections.
-
+# Notes — Real-Time Detector-Style Ingestion & Cleaning Pipeline
 ---
-
-# Notes — Real-Time Detector Style Ingestion and Cleaning Pipeline
 
 ## Project goal
 
-Build a small real-time telemetry pipeline that can deal with bad sensor data.
+Build a real-time telemetry pipeline that behaves like a detector.
 
 The system should:
 
-* accept unreliable input
-* detect problems without modifying data
-* output regular, clean frames for downstream use
+* accept corrupted sensor data
+* detect problems without hiding them
+* output a clean, regular stream
+* prove that cleaning improves downstream prediction
 
-This is meant to look like a simplified detector / telemetry system.
+This is not about “pretty data”.
+It’s about making data **usable for models**.
 
 ---
 
-## Component 1 — Sensor Simulator
+# Phase 1 — Getting data into the system
 
-### What it does
+## Sensor simulator (first version)
 
-A long-running Python loop that emits packets at ~1 Hz.
+I started by writing a Python loop that emits one packet per second.
 
 Each packet contains:
 
-* `timestamp` (event time)
+* `timestamp` (event time, not arrival time)
 * `sensor_id`
 * `sequence_number`
 * `value`
 * `status`
 
-The simulator is intentionally unreliable.
+At first it was only one sensor.
 
 ### Failure modes added
 
-* **Noise**
-  Small random variation around a baseline.
+The simulator was made intentionally unreliable:
 
-* **Drift**
-  Baseline slowly shifts over time.
-
+* **Noise** – random jitter around a baseline
+* **Drift** – baseline slowly moves over time
 * **Missing packets**
 
-  * random single drops
-  * bursty gaps (2–5 seconds)
-
+  * random drops
+  * burst losses (2–5 seconds)
 * **Sequence corruption**
 
   * skipped sequence numbers
   * rare duplicates
-
 * **Status flags**
 
   * `NOMINAL`
-  * `DEGRADED` (high noise / drift)
-  * `RECOVERING` (after burst loss)
+  * `DEGRADED`
+  * `RECOVERING`
 
-This is not random junk — the failures are controlled.
-
----
-
-## Component 2 — Message Bus (initial version)
-
-Started with a simple in-process message bus.
-
-It:
-
-* holds subscribers
-* publishes packets to all of them
-
-It does **not**:
-
-* validate packets
-* modify packets
-* store state
-
-This made it easy to reason about pipeline order.
+This gave me a controllable but realistic source of bad telemetry.
 
 ---
 
-## Component 3 — Validator
+# Phase 2 — Wiring the pipeline
 
-### Purpose
+## MessageBus (initial transport)
 
-Check whether packets violate basic physical rules.
+I first used a simple in-memory `MessageBus`:
 
-Validator checks:
+* it keeps a list of subscribers
+* it publishes packets to all of them
+* it does not modify or validate anything
 
-* packet schema
-* sequence going backwards
-* timestamps jumping backwards or too far ahead
+This made it easy to test the flow before adding real infrastructure.
 
-Important choice:
+---
 
-* invalid packets are **observed, not dropped**
+## Validator
+
+The validator checks if packets violate physical invariants.
+
+It checks:
+
+* required fields and types
+* sequence numbers going backwards
+* timestamps jumping backwards
+* timestamps too far in the future
+
+Important design decision:
+
+> Violations are logged but packets are never dropped.
 
 This keeps detection separate from correction.
 
+Later, the validator exported Prometheus metrics so violations could be graphed.
+
 ---
 
-## Component 4 — Observer
+## Observer
 
-### Purpose
+The observer watches the raw stream without changing it.
 
-Track data quality without fixing anything.
-
-Observer detects:
+It tracks:
 
 * missing packets
-* non-monotonic sequences
-* abnormal time gaps
-* recovery periods
+* large time gaps
 * degraded packets
+* recovery periods
 
-Observer is read-only by design.
+This gives me a live picture of data quality.
+
+Observer also exports Prometheus counters.
 
 ---
 
-## Component 5 — Preprocessor
+# Phase 3 — Making the data usable
 
-### Purpose
+## Preprocessor
 
-Convert irregular input into a clean, regular stream.
+This is where raw telemetry becomes clean data.
 
-### Guarantees
+The preprocessor enforces:
 
-* fixed output cadence: **1 Hz**
-* one output frame per second
-* strictly increasing output sequence
-* output sequence independent of raw sensor sequence numbers
+* fixed output cadence (1 Hz)
+* exactly one frame per second
+* strictly increasing logical sequence
+* explicit quality labels
+
+The output sequence is **not** the sensor sequence.
+It is a logical clock for downstream systems.
 
 ### Missing data handling
 
-* **single gap**
-  forward-fill last value → `IMPUTED`
+* one missing → forward fill → `IMPUTED`
+* multiple missing → keep filling → `IMPUTED`
+* long silence → placeholder → `UNUSABLE`
 
-* **multiple gaps**
-  keep forward-filling → `IMPUTED`
-
-* **long silence**
-  emit placeholder → `UNUSABLE`
-
-Past frames are never changed.
+Frames are never rewritten.
+Time always moves forward.
 
 ---
 
-## Invariants after preprocessing
+# Phase 4 — Making it real (Redis)
 
-Downstream can assume:
+## Replacing MessageBus with Redis Streams
 
-* regular time
-* no missing frames
-* explicit quality flags
-* monotonic sequence numbers
+The in-memory bus was replaced with Redis without changing logic.
 
-No guessing required.
+Redis is used only as a **stream**:
 
----
+* simulator writes packets with `XADD`
+* consumers read using `XREADGROUP`
 
-## Entry point cleanup
+Two streams exist:
 
-Originally the simulator was doing too much:
+* `sensor_packets` (raw)
+* `sensor_clean` (preprocessed frames)
 
-* generating data
-* wiring components
-* acting as entry point
-
-### Fix
-
-* added `src/main.py`
-* simulator became a callable function
-* all wiring moved into `main.py`
-
-Correct way to run:
-
-```bash
-python -m src.main
-```
+The simulator does not know about Redis — it only calls `emit(packet)`.
 
 ---
 
-## Observability
+# Phase 5 — Observability
 
-Added Prometheus metrics:
+## Prometheus
+
+Metrics added for:
 
 * validator violations
-* observer degradation counts
-* preprocessor timing/output
+* observer counts
+* preprocessor output rate
+* downstream model error
 
-Metrics are exposed at:
+All metrics are exposed on `/metrics`.
 
-```
-/metrics
-```
+## Grafana
 
----
+Grafana shows:
 
-## Checkpoint — Redis Integration
+* raw vs clean prediction error
+* packet loss
+* sensor degradation
+* cleaning benefit
 
-### Goal
-
-Replace the in-memory MessageBus with Redis Streams **without touching logic**.
-
-Things not allowed to change:
-
-* packet schema
-* validator / observer / preprocessor behavior
-* metrics
-
-Only the transport layer should change.
+This makes the system falsifiable instead of theoretical.
 
 ---
 
-## Problems hit during Redis wiring
+# Phase 6 — Multi-sensor support
 
-### Redis setup
+The simulator was upgraded to produce multiple sensors:
 
-* Installed Redis via Homebrew
-* Started Redis as a service
-* Verified with `redis-cli ping`
+* `sensor_001`
+* `sensor_002`
+* `sensor_003`
 
-No issues here.
+Each has its own:
 
----
+* baseline
+* drift
+* noise
+* loss
 
-### Import errors (`ModuleNotFoundError: src`)
-
-Kept seeing errors like:
-
-```
-No module named 'src'
-```
-
-Cause:
-
-* running `python src/main.py`
-
-Fix:
-
-* run as a module:
-
-```bash
-python -m src.main
-```
-
-* make sure `src/__init__.py` exists
+This turned the pipeline from a toy into a detector array.
 
 ---
 
-### Redis modules not found
+# Phase 7 — Normalization
 
-Error:
+Raw sensor values are not comparable across sensors.
 
-```
-No module named 'redis_producer'
-```
+So I added per-sensor rolling statistics:
 
-Cause:
+* mean
+* standard deviation
 
-* imports inside `src/` need to be `from src.x import y`
-
-Fix:
-
-```python
-from src.redis_producer import RedisProducer
-from src.redis_consumer import RedisConsumer
-```
-
----
-
-### Simulator not running
-
-Program started, printed metrics message, then appeared stuck.
-
-Cause:
-
-* `consumer.consume()` is a blocking loop
-* simulator was never starting
-
-Fix:
-
-* run simulator in a background thread
-* let Redis consumer block in main thread
-
----
-
-## Current architecture (Redis version)
+Each output frame now includes:
 
 ```
-Simulator (thread)
-   ↓
-Redis Stream
-   ↓
-RedisConsumer (blocking)
-   ↓
-Validator → Observer → Preprocessor
+normalized = (value − mean) / std
 ```
 
----
-
-## Key changes made
-
-### Simulator
-
-* simulator no longer knows about MessageBus or Redis
-* it only calls `emit(packet)`
-
-```python
-def run_simulator(emit):
-    emit(packet)
-```
+This lets models see **signal instead of scale**.
 
 ---
 
-### main.py
+# Phase 8 — Downstream model
 
-* RedisProducer handles writes
-* RedisConsumer handles reads
-* simulator runs in a background thread
+A simple moving-average predictor.
 
-```python
-sim_thread = threading.Thread(
-    target=run_simulator,
-    args=(emit,),
-    daemon=True,
-)
-sim_thread.start()
+For each sensor:
 
-consumer.consume(handle_packet)
-```
+* predict next value as mean of last N values
+* compute absolute error
 
----
+The same model runs on:
 
-## Current state
+* raw stream
+* cleaned, normalized stream
 
-* Redis is running
-* simulator emits packets
-* Redis stream fills
-* consumer reads packets
-* validator, observer, preprocessor run unchanged
-* CLEAN frames are printed
-* metrics endpoint works
+Both errors are exported to Prometheus.
+
+If cleaning works, cleaned error should be lower.
 
 ---
 
-## Note — Redis integration (what it is and where I am now)
+# Phase 9 — Containerization
 
-### What Redis is (for this project)
+Everything runs in Docker:
 
-Redis is being used as a **message stream** between parts of the pipeline.
+* Redis
+* pipeline
+* Prometheus
+* Grafana
 
-Instead of passing packets in memory:
-
-* the simulator writes packets to Redis
-* the rest of the pipeline reads packets from Redis
-
-This makes the system closer to a real streaming setup, where producers and consumers are decoupled.
-
-I’m using **Redis Streams** (`XADD`, `XREADGROUP`), not Redis as a database or cache.
+Grafana uses a persistent volume.
+Dashboards are exported as JSON and committed.
 
 ---
 
-### How Redis is used here
+# Current state
 
-* **RedisProducer**
+The system is now:
 
-  * takes a packet (Python dict)
-  * serializes fields to JSON
-  * writes it to a Redis stream using `XADD`
+* multi-sensor
+* event-time correct
+* loss-tolerant
+* normalized
+* observable
+* reproducible
+* quantitatively validated
 
-* **RedisConsumer**
-
-  * reads packets from the same stream using `XREADGROUP`
-  * blocks while waiting (expected behavior)
-  * passes each packet through:
-
-    * validator
-    * observer
-    * preprocessor
-
-The simulator does not know about Redis directly.
-It only calls an `emit(packet)` function.
+It runs end-to-end and proves that cleaning improves inference.
 
 ---
 
-### How this is wired
+# Final check against the original goal
 
-* Simulator runs in a **background thread**
-* Redis consumer runs in the **main thread**
-* Redis acts as the boundary between them
+Original spec:
 
-Current flow:
+> “Build a streaming ingestion pipeline that cleans, aligns, imputes, and emits normalized data to a downstream model.
+> Show that cleaning improves downstream model accuracy.”
 
-```
-Simulator (thread)
-   → Redis Stream
-   → RedisConsumer (blocking)
-   → Validator
-   → Observer
-   → Preprocessor
-```
+>> Now?
+- Under drift, loss, and jitter, preprocessing reduces predictive error across all sensors — and Grafana shows it live.
 
 ---
 
-### Where the project is right now
-
-What works:
-
-* simulator emits realistic, faulty data
-* Redis receives packets
-* consumer reads packets correctly
-* validator, observer, preprocessor run unchanged
-* output frames are produced regularly
-* metrics endpoint is live
-
-What this means:
-
-* the in-memory MessageBus has effectively been replaced
-* the pipeline runs end-to-end using a real streaming backend
-* core architecture is stable
-
-Next steps (not done yet):
-
-* cleanly remove old MessageBus code
-* add dashboards (Grafana)
-* add evaluation numbers
-* containerize the pipeline
-
-Right now, the system is **functionally complete at the streaming level** and ready for polish and evaluation.
----
-From the original spec:
-
-“Build a streaming ingestion pipeline that cleans, aligns, imputes, and emits normalized data to a downstream model.
-Show that cleaning improves downstream model accuracy.”
-
-You have literally done that.
-
-You can now write, without bluffing:
-
-“Under realistic packet loss, drift, and jitter, preprocessing reduced downstream prediction error across all sensors.”
-
-And you can point to a live Grafana panel that proves it.
-
-
-“Under drift, loss, and jitter, preprocessing reduces predictive error across all sensors.”
