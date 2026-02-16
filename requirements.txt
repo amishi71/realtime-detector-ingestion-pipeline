@@ -1,2 +1,4 @@
 redis
 prometheus-client
+pyyaml
+numpy

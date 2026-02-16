@@ -1,284 +1,190 @@
 # Notes — Real-Time Detector-Style Ingestion & Cleaning Pipeline
 ---
 
-## Project goal
+## What This Is
+- A streaming system that generates corrupted sensor data, cleans it in real time, and checks whether preprocessing actually improves prediction accuracy.
 
-Build a real-time telemetry pipeline that behaves like a detector.
-
-The system should:
-
-* accept corrupted sensor data
-* detect problems without hiding them
-* output a clean, regular stream
-* prove that cleaning improves downstream prediction
-
-This is not about “pretty data”.
-It’s about making data **usable for models**.
+- Question: does cleaning help, or can models just learn through the noise?
 
 ---
 
-# Phase 1 — Getting data into the system
+## Running the Stack
 
-## Sensor simulator (first version)
+```bash
+# Start everything
+docker compose up --build
 
-I started by writing a Python loop that emits one packet per second.
+# Run in background
+docker compose up -d --build
 
-Each packet contains:
+# Watch logs
+docker compose logs -f
 
-* `timestamp` (event time, not arrival time)
-* `sensor_id`
-* `sequence_number`
-* `value`
-* `status`
+# Shut down
+docker compose down
 
-At first it was only one sensor.
-
-### Failure modes added
-
-The simulator was made intentionally unreliable:
-
-* **Noise** – random jitter around a baseline
-* **Drift** – baseline slowly moves over time
-* **Missing packets**
-
-  * random drops
-  * burst losses (2–5 seconds)
-* **Sequence corruption**
-
-  * skipped sequence numbers
-  * rare duplicates
-* **Status flags**
-
-  * `NOMINAL`
-  * `DEGRADED`
-  * `RECOVERING`
-
-This gave me a controllable but realistic source of bad telemetry.
-
----
-
-# Phase 2 — Wiring the pipeline
-
-## MessageBus (initial transport)
-
-I first used a simple in-memory `MessageBus`:
-
-* it keeps a list of subscribers
-* it publishes packets to all of them
-* it does not modify or validate anything
-
-This made it easy to test the flow before adding real infrastructure.
-
----
-
-## Validator
-
-The validator checks if packets violate physical invariants.
-
-It checks:
-
-* required fields and types
-* sequence numbers going backwards
-* timestamps jumping backwards
-* timestamps too far in the future
-
-Important design decision:
-
-> Violations are logged but packets are never dropped.
-
-This keeps detection separate from correction.
-
-Later, the validator exported Prometheus metrics so violations could be graphed.
-
----
-
-## Observer
-
-The observer watches the raw stream without changing it.
-
-It tracks:
-
-* missing packets
-* large time gaps
-* degraded packets
-* recovery periods
-
-This gives me a live picture of data quality.
-
-Observer also exports Prometheus counters.
-
----
-
-# Phase 3 — Making the data usable
-
-## Preprocessor
-
-This is where raw telemetry becomes clean data.
-
-The preprocessor enforces:
-
-* fixed output cadence (1 Hz)
-* exactly one frame per second
-* strictly increasing logical sequence
-* explicit quality labels
-
-The output sequence is **not** the sensor sequence.
-It is a logical clock for downstream systems.
-
-### Missing data handling
-
-* one missing → forward fill → `IMPUTED`
-* multiple missing → keep filling → `IMPUTED`
-* long silence → placeholder → `UNUSABLE`
-
-Frames are never rewritten.
-Time always moves forward.
-
----
-
-# Phase 4 — Making it real (Redis)
-
-## Replacing MessageBus with Redis Streams
-
-The in-memory bus was replaced with Redis without changing logic.
-
-Redis is used only as a **stream**:
-
-* simulator writes packets with `XADD`
-* consumers read using `XREADGROUP`
-
-Two streams exist:
-
-* `sensor_packets` (raw)
-* `sensor_clean` (preprocessed frames)
-
-The simulator does not know about Redis — it only calls `emit(packet)`.
-
----
-
-# Phase 5 — Observability
-
-## Prometheus
-
-Metrics added for:
-
-* validator violations
-* observer counts
-* preprocessor output rate
-* downstream model error
-
-All metrics are exposed on `/metrics`.
-
-## Grafana
-
-Grafana shows:
-
-* raw vs clean prediction error
-* packet loss
-* sensor degradation
-* cleaning benefit
-
-This makes the system falsifiable instead of theoretical.
-
----
-
-# Phase 6 — Multi-sensor support
-
-The simulator was upgraded to produce multiple sensors:
-
-* `sensor_001`
-* `sensor_002`
-* `sensor_003`
-
-Each has its own:
-
-* baseline
-* drift
-* noise
-* loss
-
-This turned the pipeline from a toy into a detector array.
-
----
-
-# Phase 7 — Normalization
-
-Raw sensor values are not comparable across sensors.
-
-So I added per-sensor rolling statistics:
-
-* mean
-* standard deviation
-
-Each output frame now includes:
-
+# Full clean restart
+docker compose down -v
 ```
-normalized = (value − mean) / std
+---
+
+## Current State
+**Working:**
+- 3 simulated sensors with independent drift, noise, loss patterns
+- Redis streams moving data between services
+- Validator checks packet structure and sequence
+- Observer tracks loss rates and state changes
+- Preprocessor normalizes and imputes missing data
+- Real-time Grafana dashboards
+- Fully containerized
+
+**In progress:**
+- 24-hour stability runs
+- Understanding why preprocessing helps one sensor but hurts two others
+- Per-sensor tuning instead of global parameters
+
+**Latest numbers** (3 sensors, 1 Hz, ~5% single packet loss, 2% burst loss; see `config/simulator.yaml`):
+
+| Sensor      | Raw error | Clean error | Change    |
+| ----------- | --------- | ----------- | --------- |
+| 001         | 0.371     | 0.389       | +4.9%     |
+| 002         | 0.597     | 0.588       | -1.5%     |
+| 003         | 0.230     | 0.266       | +15.7%    |
+| **Average** | **0.399** | **0.414**   | **+3.8%** |
+
+- Preprocessing made average error worse. 
+- That wasn't expected: deeper research needed.
+
+---
+
+## Notes:
+
+### Preprocessing isn't automatically helpful
+- Assumed cleaning would improve accuracy. 
+- For two of three sensors, it degraded. 
+- Global normalization might be smoothing out signal along with noise. 
+- Next step: per-sensor parameters.
+
+### Redis streams work well for this
+- Consumer groups let each service run independently. 
+- If preprocessor crashes, validator keeps going. 
+- At-least-once delivery means no silent data loss.
+
+### Dashboards catch what you miss
+- Wouldn't have noticed sensor 003's error spike without real-time visualization. 
+- For future projects ensure: metrics first, then optimization.
+
+### Realistic simulation matters
+- Gaussian noise is too clean. 
+- Burst loss + drift + jitter actually stresses the system. 
+- If it works here, it might work on real hardware.
+
+---
+
+## What I'd Do Differently Starting Over
+- Assume multiple sensors from day one (refactoring is tedious)
+- Add metrics before adding features
+- Write tests earlier
+- Get real sensor data sooner
+
+---
+
+## Building notes
+
+### Phase 1 — Simulator
+Python script emitting packets with:
+- timestamp (event time, not arrival)
+- sensor_id
+- sequence_number
+- value
+- status (NOMINAL/DEGRADED/RECOVERING)
+
+* Corruption is configured: noise, drift, random loss, burst loss (2-5 packets), sequence skips.
+
+### Phase 2 — First Transport
+- Started with in-memory message bus (just Python objects).  
+- Tested logic without Redis complexity.
+
+### Phase 3 — Validator
+Check:
+- required fields exist
+- sequence numbers don't go backwards
+- timestamps aren't wildly out of order
+
+* Rule: validate but never drop. Log violations and keep packets moving.
+
+### Phase 4 — Observer
+Passive monitor- track:
+- inferred packet loss
+- large time gaps
+- degraded/recovering states
+
+* No modific*ations.
+
+### Phase 5 — Preprocessor
+Where cleaning happens, enforce:
+- one output per second (logical clock)
+- strictly increasing sequence
+- quality labels (VALID/IMPUTED/UNUSABLE)
+
+Missing data handling (implemented):
+- Gaps ≤ `max_linear_gap`: linear interpolation between the last known value and the next real packet (emitted as `IMPUTED`).
+- Gaps > `max_linear_gap` and ≤ `max_spline_gap`: polynomial fit using recent window values plus the next packet as endpoint (NumPy `polyfit`, degree up to 3), emitted as `IMPUTED`.
+- Gaps > `max_spline_gap`: fallback strategy (default: forward-fill) and may be marked `UNUSABLE` if exceeding `unusable_after`.
+
+* Note: imputed frames are emitted with `quality: "IMPUTED"` and are included in rolling statistics unless marked `UNUSABLE`. The implementation uses `numpy`.
+
+### Phase 6 — Redis
+Swap in Redis streams without changing core logic- decoupled services:
+- `sensor_packets` (raw)
+- `clean_packets` (preprocessed)
+
+### Phase 7 — Prometheus + Grafana
+Metrics everywhere:
+- validator violations
+- observer loss counts
+- preprocessor throughput
+- prediction errors
+
+* Dashboards compare raw vs clean error in real time. 
+
+### Phase 8 — Multi-Sensor
+- Refactor simulator for multiple independent sensors (001, 002, 003). 
+- Each with its own baseline, drift, noise profile.
+
+### Phase 9 — Normalization
+- Raw values are scale-dependent. 
+- Added per-sensor rolling mean/std so frames include:
+```
+normalized = (value - mean) / std
 ```
 
-This lets models see **signal instead of scale**.
+### Phase 10 — Evaluation Model
+Simple moving average predictor (window size 5). Two identical models run in parallel:
+- one on raw stream
+- one on clean stream
+
+* Prediction errors go to Prometheus. This isolates preprocessing as the only variable.
+
+### Phase 11 — Containerization
+Everything in Docker Compose:
+- Redis
+- all pipeline services
+- Prometheus
+- Grafana
 
 ---
 
-# Phase 8 — Downstream model
+## Current Properties
+- Multi-sensor
+- Event-time consistent
+- Loss-tolerant
+- Normalization-aware
+- Observable
+- Reproducible
+- Experimentally structured
 
-A simple moving-average predictor.
+The pipeline runs end-to-end and isolates preprocessing impact on prediction error under drift, noise, and packet loss.
 
-For each sensor:
-
-* predict next value as mean of last N values
-* compute absolute error
-
-The same model runs on:
-
-* raw stream
-* cleaned, normalized stream
-
-Both errors are exported to Prometheus.
-
-If cleaning works, cleaned error should be lower.
-
----
-
-# Phase 9 — Containerization
-
-Everything runs in Docker:
-
-* Redis
-* pipeline
-* Prometheus
-* Grafana
-
-Grafana uses a persistent volume.
-Dashboards are exported as JSON and committed.
-
----
-
-# Current state
-
-The system is now:
-
-* multi-sensor
-* event-time correct
-* loss-tolerant
-* normalized
-* observable
-* reproducible
-* quantitatively validated
-
-It runs end-to-end and proves that cleaning improves inference.
-
----
-
-# Final check against the original goal
-
-Original spec:
-
-> “Build a streaming ingestion pipeline that cleans, aligns, imputes, and emits normalized data to a downstream model.
-> Show that cleaning improves downstream model accuracy.”
-
->> Now?
-- Under drift, loss, and jitter, preprocessing reduces predictive error across all sensors — and Grafana shows it live.
-
----
-
+Does preprocessing help? 
+>> Only **Sometimes.** 

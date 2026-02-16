@@ -1,0 +1,29 @@
+# Simulator configuration
+sensors: 3
+frequency: 1
+
+# Sensor baselines and drift
+sensors_config:
+  sensor_001:
+    baseline: 100.0
+    drift: 0.01
+  sensor_002:
+    baseline: 200.0
+    drift: -0.005
+  sensor_003:
+    baseline: 300.0
+    drift: 0.02
+
+# Corruption probabilities
+burst_prob: 0.02
+single_loss_prob: 0.05
+duplicate_prob: 0.01
+gap_prob: 0.01
+backwards_prob: 0.05
+timestamp_corruption_prob: 0.05
+
+# Thresholds
+noise_range: 0.5
+degraded_noise_threshold: 0.4
+degraded_drift_threshold: 1.0
+recovery_duration: 3

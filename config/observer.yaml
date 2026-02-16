@@ -1,0 +1,3 @@
+# Observer configuration
+max_time_gap_seconds: 1.5
+expected_cadence_seconds: 1.0

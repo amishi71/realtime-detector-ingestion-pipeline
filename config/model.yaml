@@ -1,0 +1,2 @@
+# Model configuration
+window_size: 5 # Moving average window size

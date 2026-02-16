@@ -1,0 +1,16 @@
+# prometheus configuration
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: "telemetry_pipeline"
+    static_configs:
+      - targets:
+          - "simulator:8000"
+          - "validator:8001"
+          - "observer:8002"
+          - "preprocessor:8003"
+          - "model:8004"
+    metrics_path: /metrics
+    scrape_interval: 5s

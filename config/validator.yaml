@@ -1,0 +1,11 @@
+# Validator configuration
+max_future_skew_seconds: 5
+max_backward_skew_seconds: 2
+
+# Valid status values (from simulator)
+valid_statuses:
+  - NOMINAL
+  - DEGRADED
+  - RECOVERING
+  - OK
+  - MISSING

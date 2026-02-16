@@ -1,0 +1,22 @@
+# Preprocessor configuration
+target_rate: 1 # Hz (output cadence)
+normalization_window: 100 # Samples for rolling stats
+unusable_after: 5 # Mark as UNUSABLE after this many consecutive missing frames
+
+# Imputation strategies (documented implementation)
+# - Gaps <= max_linear_gap: linear interpolation between last known value
+#   and the next real packet (preserves short-term continuity).
+# - Gaps > max_linear_gap and <= max_spline_gap: polynomial fit using
+#   recent window values plus the next packet as endpoint. Implemented
+#   via NumPy's polyfit (degree up to 3). This provides a smooth estimate
+#   for moderate gaps without requiring SciPy.
+# - Gaps > max_spline_gap: fallback strategy (default: forward_fill).
+#
+# Note: Imputed frames are emitted with quality="IMPUTED" and are
+# included in rolling statistics (mean/std) unless marked UNUSABLE.
+# Ensure `numpy` is available in the runtime environment (added to
+# `requirements.txt`).
+imputation:
+  max_linear_gap: 3 # Gaps ≤3 → linear interpolation
+  max_spline_gap: 10 # Gaps 4-10 → polynomial (NumPy polyfit up to degree 3)
+  fallback: "forward_fill" # For gaps > max_spline_gap
